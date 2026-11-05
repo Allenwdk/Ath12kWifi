@@ -37,7 +37,10 @@ def resolve(name, source, check_only):
     if missing and check_only:
         raise SystemExit(f"{name}: missing sparse paths: {', '.join(missing)}; run tools/fetch-sources.sh")
     if not check_only:
-        subprocess.run(["git", "-C", str(directory), "sparse-checkout", "add", *source["paths"]], check=True)
+        # The lock includes anchored patterns and individual files. A fresh
+        # --sparse clone starts in cone mode, which accepts directories only.
+        subprocess.run(["git", "-C", str(directory), "sparse-checkout", "set", "--no-cone", "--stdin"],
+                       input="\n".join(source["paths"]) + "\n", text=True, check=True)
     hashes = {path: hashlib.sha256((directory / path).read_bytes()).hexdigest()
               for path in source["required"]}
     return {"revision": revision, "files_sha256": hashes}

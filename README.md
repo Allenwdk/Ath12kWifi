@@ -1,5 +1,11 @@
 # Ath12kWifi
 
+On the `feat/uke-wifi-20261106` development branch, the uke board first
+brings up WCN6750 WPSS through SMEM GLINK. The production manifest below
+still selects the upstream ath12k PCI/MHI backend; an ath11k AHB/hybrid
+backend is pending. The source fetcher selects non-cone sparse patterns
+because the lock includes both directories and individual source files.
+
 Linux ath12k, mac80211 and cfg80211 on XNU, with userspace authentication
 through wpa_supplicant 2.12. Board callbacks provide power, PCIe, BAR access,
 MSI, DMA, firmware loading and the native network interface.
