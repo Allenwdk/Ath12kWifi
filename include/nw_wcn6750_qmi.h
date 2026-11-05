@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
-/* Read-only identity queries for WCN6750 board bring-up. The encoder,
+/* WLFW setup and identity queries for WCN6750 board bring-up. The encoder,
  * decoder and field descriptors are taken from the locked Linux source.
  * This does not replace ath11k's firmware lifecycle or configure a radio. */
 #ifndef NW_WCN6750_QMI_H

@@ -8,6 +8,8 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 TABLES = [
+    'qmi_wlanfw_ind_register_req_msg_v01_ei', 'qmi_wlanfw_ind_register_resp_msg_v01_ei',
+    'qmi_wlanfw_host_cap_req_msg_v01_ei', 'qmi_wlanfw_host_cap_resp_msg_v01_ei',
     'qmi_wlanfw_cap_req_msg_v01_ei', 'qmi_wlanfw_device_info_req_msg_v01_ei',
     'qmi_wlfw_device_info_resp_msg_v01_ei', 'qmi_wlanfw_rf_chip_info_s_v01_ei',
     'qmi_wlanfw_rf_board_info_s_v01_ei', 'qmi_wlanfw_soc_info_s_v01_ei',
@@ -21,11 +23,42 @@ WRAPPER = r'''
 unsigned nw_wcn6750_query_timeout_ms(void) { return ATH11K_QMI_WLANFW_TIMEOUT_MS; }
 int nw_wcn6750_query_request(unsigned message, unsigned transaction, uint8_t *out, size_t capacity) {
     const struct qmi_elem_info *ei;
-    if (message == QMI_WLANFW_CAP_REQ_V01) ei = qmi_wlanfw_cap_req_msg_v01_ei;
+    union {
+        struct qmi_wlanfw_ind_register_req_msg_v01 indications;
+        struct qmi_wlanfw_host_cap_req_msg_v01 host;
+    } request = {};
+    const void *body = NULL;
+    size_t length = 0;
+    if (message == QMI_WLANFW_IND_REGISTER_REQ_V01) {
+        /* ath11k_qmi_fw_ind_register_send(), fixed_fw_mem branch. */
+        request.indications.client_id_valid = 1;
+        request.indications.client_id = QMI_WLANFW_CLIENT_ID;
+        request.indications.fw_ready_enable_valid = 1;
+        request.indications.fw_ready_enable = 1;
+        request.indications.cal_done_enable_valid = 1;
+        request.indications.cal_done_enable = 1;
+        request.indications.fw_init_done_enable_valid = 1;
+        request.indications.fw_init_done_enable = 1;
+        body = &request.indications;
+        length = QMI_WLANFW_IND_REGISTER_REQ_MSG_V01_MAX_LEN;
+        ei = qmi_wlanfw_ind_register_req_msg_v01_ei;
+    } else if (message == QMI_WLANFW_HOST_CAP_REQ_V01) {
+        /* ath11k_qmi_host_cap_send(), WCN6750 settings at first boot.
+         * The fixed memory mode is 0, calibration has not run, and
+         * WCN6750 advertises neither M3 support nor a modem TLV. */
+        request.host.num_clients_valid = 1;
+        request.host.num_clients = 1;
+        request.host.mem_cfg_mode_valid = 1;
+        request.host.bdf_support_valid = 1;
+        request.host.bdf_support = 1;
+        request.host.cal_done_valid = 1;
+        body = &request.host;
+        length = QMI_WLANFW_HOST_CAP_REQ_MSG_V01_MAX_LEN;
+        ei = qmi_wlanfw_host_cap_req_msg_v01_ei;
+    } else if (message == QMI_WLANFW_CAP_REQ_V01) ei = qmi_wlanfw_cap_req_msg_v01_ei;
     else if (message == QMI_WLANFW_DEVICE_INFO_REQ_V01) ei = qmi_wlanfw_device_info_req_msg_v01_ei;
     else return -EOPNOTSUPP;
-    size_t length = 0;
-    void *encoded = qmi_encode_message(QMI_REQUEST, message, &length, transaction, ei, NULL);
+    void *encoded = qmi_encode_message(QMI_REQUEST, message, &length, transaction, ei, body);
     if (IS_ERR(encoded)) return PTR_ERR(encoded);
     if (length > capacity) { kfree(encoded); return -EMSGSIZE; }
     memcpy(out, encoded, length); kfree(encoded); return (int)length;
@@ -46,10 +79,11 @@ static int response_bounds(unsigned message, const uint8_t *data, size_t length)
         if (bytes > left) return -EINVAL;
         size_t exact = 0;
         if (type == 2) exact = 4;
+        else if (message == QMI_WLANFW_IND_REGISTER_REQ_V01 && type == 0x10) exact = 8;
         else if (message == QMI_WLANFW_DEVICE_INFO_REQ_V01) {
             if (type == 0x10) exact = 8;
             if (type == 0x11) exact = 4;
-        } else {
+        } else if (message == QMI_WLANFW_CAP_REQ_V01) {
             if (type == 0x10) exact = 8;
             if (type == 0x11 || type == 0x12 || (type >= 0x16 && type <= 0x19)) exact = 4;
             if (type == 0x15) exact = 1;
@@ -67,6 +101,22 @@ static int response_bounds(unsigned message, const uint8_t *data, size_t length)
 int nw_wcn6750_query_decode(unsigned message, const uint8_t *data, size_t length, struct nw_wcn6750_identity *out) {
     if (response_bounds(message, data, length)) return -EINVAL;
     int rc;
+    if (message == QMI_WLANFW_IND_REGISTER_RESP_V01) {
+        struct qmi_wlanfw_ind_register_resp_msg_v01 response = {};
+        rc = qmi_decode_message(data, length, qmi_wlanfw_ind_register_resp_msg_v01_ei, &response);
+        if (rc < 0) return rc;
+        out->result = response.resp.result;
+        out->error = response.resp.error;
+        return out->result ? -EIO : 0;
+    }
+    if (message == QMI_WLFW_HOST_CAP_RESP_V01) {
+        struct qmi_wlanfw_host_cap_resp_msg_v01 response = {};
+        rc = qmi_decode_message(data, length, qmi_wlanfw_host_cap_resp_msg_v01_ei, &response);
+        if (rc < 0) return rc;
+        out->result = response.resp.result;
+        out->error = response.resp.error;
+        return out->result ? -EIO : 0;
+    }
     if (message == QMI_WLANFW_CAP_RESP_V01) {
         struct qmi_wlanfw_cap_resp_msg_v01 response = {};
         rc = qmi_decode_message(data, length, qmi_wlanfw_cap_resp_msg_v01_ei, &response);
@@ -118,7 +168,7 @@ def main():
         'codec_source_sha256': hashlib.sha256(codec.read_bytes()).hexdigest(),
         'descriptor_names': TABLES, 'descriptors_modified': False,
         'generated_sha256': hashlib.sha256(generated.encode()).hexdigest(),
-        'purpose': 'read-only CAP and DEVICE_INFO board discovery before ath11k data-path integration',
+        'purpose': 'ath11k fixed-memory server-arrival sequence through CAP and DEVICE_INFO',
     }, indent=2) + '\n')
     print(output)
 
