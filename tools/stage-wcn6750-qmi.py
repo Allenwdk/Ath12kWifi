@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TABLES = [
     'qmi_wlanfw_ind_register_req_msg_v01_ei', 'qmi_wlanfw_ind_register_resp_msg_v01_ei',
     'qmi_wlanfw_host_cap_req_msg_v01_ei', 'qmi_wlanfw_host_cap_resp_msg_v01_ei',
+    'qmi_wlanfw_bdf_download_req_msg_v01_ei', 'qmi_wlanfw_bdf_download_resp_msg_v01_ei',
     'qmi_wlanfw_cap_req_msg_v01_ei', 'qmi_wlanfw_device_info_req_msg_v01_ei',
     'qmi_wlfw_device_info_resp_msg_v01_ei', 'qmi_wlanfw_rf_chip_info_s_v01_ei',
     'qmi_wlanfw_rf_board_info_s_v01_ei', 'qmi_wlanfw_soc_info_s_v01_ei',
@@ -20,6 +21,9 @@ WRAPPER = r'''
 #include "nw_wcn6750_qmi.h"
 /* Exact descriptor definitions from the pinned original qmi.c follow. */
 @TABLES@
+_Static_assert(NW_WCN6750_BDF_CHUNK == QMI_WLANFW_MAX_DATA_SIZE_V01, "ath11k segment size");
+_Static_assert((int)NW_WCN6750_BDF_ELF == (int)ATH11K_QMI_BDF_TYPE_ELF, "ath11k ELF type");
+_Static_assert((int)NW_WCN6750_REGDB == (int)ATH11K_QMI_BDF_TYPE_REGDB, "ath11k regdb type");
 unsigned nw_wcn6750_query_timeout_ms(void) { return ATH11K_QMI_WLANFW_TIMEOUT_MS; }
 int nw_wcn6750_query_request(unsigned message, unsigned transaction, uint8_t *out, size_t capacity) {
     const struct qmi_elem_info *ei;
@@ -63,6 +67,38 @@ int nw_wcn6750_query_request(unsigned message, unsigned transaction, uint8_t *ou
     if (length > capacity) { kfree(encoded); return -EMSGSIZE; }
     memcpy(out, encoded, length); kfree(encoded); return (int)length;
 }
+int nw_wcn6750_bdf_request(unsigned transaction, unsigned type, uint32_t file_id,
+                          uint32_t segment, uint32_t remaining, const uint8_t *data,
+                          uint8_t *out, size_t capacity) {
+    if (!data || !remaining || (type != NW_WCN6750_BDF_ELF && type != NW_WCN6750_REGDB))
+        return -EINVAL;
+    struct qmi_wlanfw_bdf_download_req_msg_v01 *request = kzalloc_obj(*request);
+    if (!request) return -ENOMEM;
+    /* ath11k_qmi_load_file_target_mem(), streamed non-EEPROM branch. */
+    request->valid = 1;
+    request->file_id_valid = 1;
+    request->file_id = file_id;
+    request->total_size_valid = 1;
+    request->total_size = remaining;
+    request->seg_id_valid = 1;
+    request->seg_id = segment;
+    request->data_valid = 1;
+    request->data_len = remaining > NW_WCN6750_BDF_CHUNK ? NW_WCN6750_BDF_CHUNK : remaining;
+    memcpy(request->data, data, request->data_len);
+    request->end_valid = 1;
+    request->end = remaining == request->data_len;
+    request->bdf_type_valid = 1;
+    request->bdf_type = type;
+    size_t length = QMI_WLANFW_BDF_DOWNLOAD_REQ_MSG_V01_MAX_LEN;
+    void *encoded = qmi_encode_message(QMI_REQUEST, QMI_WLANFW_BDF_DOWNLOAD_REQ_V01, &length,
+                                       transaction, qmi_wlanfw_bdf_download_req_msg_v01_ei, request);
+    kfree(request);
+    if (IS_ERR(encoded)) return PTR_ERR(encoded);
+    if (length > capacity) { kfree(encoded); return -EMSGSIZE; }
+    memcpy(out, encoded, length);
+    kfree(encoded);
+    return (int)length;
+}
 /* The original decoder assumes complete TLV headers and reads scalar
  * fields at their descriptor widths. Check the wire bounds before it runs. */
 static int response_bounds(unsigned message, const uint8_t *data, size_t length) {
@@ -101,6 +137,14 @@ static int response_bounds(unsigned message, const uint8_t *data, size_t length)
 int nw_wcn6750_query_decode(unsigned message, const uint8_t *data, size_t length, struct nw_wcn6750_identity *out) {
     if (response_bounds(message, data, length)) return -EINVAL;
     int rc;
+    if (message == QMI_WLANFW_BDF_DOWNLOAD_RESP_V01) {
+        struct qmi_wlanfw_bdf_download_resp_msg_v01 response = {};
+        rc = qmi_decode_message(data, length, qmi_wlanfw_bdf_download_resp_msg_v01_ei, &response);
+        if (rc < 0) return rc;
+        out->result = response.resp.result;
+        out->error = response.resp.error;
+        return out->result ? -EIO : 0;
+    }
     if (message == QMI_WLANFW_IND_REGISTER_RESP_V01) {
         struct qmi_wlanfw_ind_register_resp_msg_v01 response = {};
         rc = qmi_decode_message(data, length, qmi_wlanfw_ind_register_resp_msg_v01_ei, &response);
@@ -168,7 +212,7 @@ def main():
         'codec_source_sha256': hashlib.sha256(codec.read_bytes()).hexdigest(),
         'descriptor_names': TABLES, 'descriptors_modified': False,
         'generated_sha256': hashlib.sha256(generated.encode()).hexdigest(),
-        'purpose': 'ath11k fixed-memory server-arrival sequence through CAP and DEVICE_INFO',
+        'purpose': 'ath11k fixed-memory server-arrival sequence and board-data transport',
     }, indent=2) + '\n')
     print(output)
 
