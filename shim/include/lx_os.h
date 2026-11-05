@@ -15,7 +15,7 @@ struct device_node;
 struct attribute { const char *name; };
 struct device_attribute { struct attribute attr; };
 struct bus_type;
-struct device_driver { const char *name; const struct bus_type *bus; struct module *owner; int (*probe)(struct device *); const struct dev_pm_ops *pm; };
+struct device_driver { const struct of_device_id *of_match_table; const char *name; const struct bus_type *bus; struct module *owner; int (*probe)(struct device *); const struct dev_pm_ops *pm; };
 struct dev_pm_ops;
 struct device_type { const char *name; void (*release)(struct device *); };
 struct class { const char *name; void (*dev_release)(struct device *); };
@@ -303,6 +303,9 @@ void lx_dma_kfree(void *p);
 void lx_dma_free(struct device *d, size_t n, void *p, dma_addr_t bus);
 dma_addr_t lx_dma_map(struct device *d, void *p, size_t n, int dir);
 void lx_dma_sync(struct device *d, dma_addr_t bus, size_t n, int dir);
+void *dma_alloc_noncoherent(struct device *d, size_t n, dma_addr_t *bus, enum dma_data_direction dir, gfp_t flags);
+void dma_free_noncoherent(struct device *d, size_t n, void *p, dma_addr_t bus, enum dma_data_direction dir);
+int hex_dump_to_buffer(const void *buf, size_t len, int rowsize, int groupsize, char *linebuf, size_t linebuflen, bool ascii);
 #define dma_alloc_coherent(d, n, h, f) lx_dma_alloc(d, n, h)
 #define dma_free_coherent(d, n, p, h) lx_dma_free(d, n, p, h)
 #define dma_map_single(d, p, n, dir) lx_dma_map(d, p, n, dir)

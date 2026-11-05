@@ -93,8 +93,32 @@ struct atomic_notifier_head { int unused; };
 #define atomic_notifier_chain_unregister(h, n) 0
 #define panic_notifier_list lx_panic_list
 extern struct atomic_notifier_head lx_panic_list;
+#ifdef NW_PLATFORM_AHB
+int register_pm_notifier(struct notifier_block *notifier);
+#else
 #define register_pm_notifier(n) 0
-struct device_node { int unused; };
+#endif
+struct fwnode_handle { struct device_node *node; };
+struct device_node { const char *name; struct fwnode_handle fwnode; };
+#ifdef NW_PLATFORM_AHB
+struct property;
+struct reserved_mem;
+int of_property_read_string(const struct device_node *node, const char *name, const char **value);
+int of_property_read_u32(const struct device_node *node, const char *name, u32 *value);
+bool of_property_read_bool(const struct device_node *node, const char *name);
+int of_device_is_compatible(const struct device_node *node, const char *compatible);
+struct property *of_find_property(const struct device_node *node, const char *name, int *length);
+void of_node_put(struct device_node *node);
+struct device_node *of_get_child_by_name(const struct device_node *node, const char *name);
+const void *of_get_property(const struct device_node *node, const char *name, int *length);
+int of_address_to_resource(const struct device_node *node, int index, struct resource *resource);
+struct reserved_mem *of_reserved_mem_lookup(struct device_node *node);
+struct device_node *of_parse_phandle(const struct device_node *node, const char *name, int index);
+const struct of_device_id *of_match_node(const struct of_device_id *matches, const struct device_node *node);
+const struct of_device_id *of_match_device(const struct of_device_id *matches, const struct device *device);
+int device_property_read_string(const struct device *device, const char *name, const char **value);
+int device_property_read_u32(const struct device *device, const char *name, u32 *value);
+#else
 #define of_property_read_string(np, n, out) (-ENOENT)
 #define of_property_read_u32(np, n, out) (-ENOENT)
 #define of_property_read_bool(np, n) 0
@@ -112,4 +136,5 @@ struct device_node { int unused; };
 #define of_match_device(m, d) ((void *)0)
 #define device_property_read_string(d, n, o) (-ENOENT)
 #define device_property_read_u32(d, n, o) (-ENOENT)
+#endif
 #endif

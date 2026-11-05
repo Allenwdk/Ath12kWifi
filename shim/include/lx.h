@@ -119,6 +119,10 @@ void lx_log(int level, const char *fmt, ...) __printf(2, 3);
 
 /* byte order: the target is little endian */
 #define cpu_to_le16(x) ((__le16)(x))
+typedef unsigned long kernel_ulong_t;
+#define prefetch(address) __builtin_prefetch(address)
+void *memset32(uint32_t *destination, uint32_t value, size_t count);
+#define swab32(value) __builtin_bswap32((u32)(value))
 #define cpu_to_le32(x) ((__le32)(x))
 #define cpu_to_le64(x) ((__le64)(x))
 #define le16_to_cpu(x) ((u16)(x))

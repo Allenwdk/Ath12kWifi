@@ -79,9 +79,30 @@ void pci_unregister_driver(struct pci_driver *drv);
 #define pci_name(d) "0000:01:00.0"
 #define pm_runtime_get_sync(d) 0
 #define pm_runtime_put_sync(d) 0
-/* platform devices are not used on this board; the type is only referred to */
+/* Platform/AHB devices use explicit adapter operations, independent of PCI. */
 struct platform_device { struct device dev; };
-struct platform_driver { int (*probe)(struct platform_device *); void (*remove)(struct platform_device *); struct device_driver driver; };
+struct platform_device_info { const char *name; struct device *parent; struct fwnode_handle *fwnode; u64 dma_mask; };
+#define to_platform_device(d) container_of(d, struct platform_device, dev)
+#define platform_get_drvdata(p) dev_get_drvdata(&(p)->dev)
+#define platform_set_drvdata(p, value) dev_set_drvdata(&(p)->dev, value)
+int platform_driver_register(struct platform_driver *driver);
+void platform_driver_unregister(struct platform_driver *driver);
+struct platform_device *platform_device_register_full(const struct platform_device_info *info);
+void platform_device_unregister(struct platform_device *pdev);
+int of_dma_configure(struct device *dev, struct device_node *node, bool force_dma);
+const void *device_get_match_data(const struct device *dev);
+void *devm_platform_get_and_ioremap_resource(struct platform_device *pdev, unsigned index, struct resource **resource);
+#define module_platform_driver(driver) \
+ int driver##_init(void) { return platform_driver_register(&(driver)); } \
+ void driver##_exit(void) { platform_driver_unregister(&(driver)); }
+
+struct platform_driver { void (*shutdown)(struct platform_device *); int (*probe)(struct platform_device *); void (*remove)(struct platform_device *); struct device_driver driver; };
+struct platform_driver;
+struct resource;
+/* AHB operations are provided by the platform adapter, never by a success stub. */
+int platform_get_irq(struct platform_device *pdev, unsigned index);
+int platform_get_irq_byname(struct platform_device *pdev, const char *name);
+#define IRQF_TRIGGER_RISING 0x00000001
 struct of_device_id { char compatible[128]; const void *data; };
 #define MODULE_DEVICE_TABLE_LX(...)
 struct qcom_smem_state; struct clk; struct regulator; struct rproc;
@@ -191,7 +212,12 @@ struct wiphy *lx_g_wiphy_enter(struct wiphy *w);
 #define list_move(e, h) do { list_del(e); list_add(e, h); } while (0)
 #define kzalloc_flex(p, m, n, ...) lx_alloc(sizeof(p) + sizeof(((__typeof__(p) *)0)->m[0]) * (n), 1)
 #define kmalloc_flex(p, m, n, ...) lx_alloc(sizeof(p) + sizeof(((__typeof__(p) *)0)->m[0]) * (n), 0)
+#ifdef NW_PLATFORM_AHB
+void lx_iounmap(void *mapping);
+#define iounmap(p) lx_iounmap(p)
+#else
 #define iounmap(p) ((void)(p))
+#endif
 #define idr_for_each_entry(i, p, id) for (id = 0; id < (int)(i)->cap; id++) if (((p) = (i)->slot[id]) != 0)
 #define div_u64(a, b) ((u64)(a) / (u32)(b))
 #define div64_u64(a, b) ((u64)(a) / (u64)(b))
@@ -200,6 +226,19 @@ struct wiphy *lx_g_wiphy_enter(struct wiphy *w);
 struct ethhdr { u8 h_dest[6]; u8 h_source[6]; __be16 h_proto; } __packed;
 struct reserved_mem { phys_addr_t base, size; };
 struct resource { phys_addr_t start, end; };
+typedef u32 phandle;
+#define IORESOURCE_MEM 0x00000200
+static inline phys_addr_t resource_size(const struct resource *res) { return res->end - res->start + 1; }
+int of_machine_is_compatible(const char *compatible);
+int device_get_mac_address(struct device *dev, u8 *address);
+int of_reserved_mem_region_to_resource(const struct device_node *node, int index, struct resource *res);
+void *devm_ioremap(struct device *dev, phys_addr_t start, size_t size);
+struct resource *platform_get_resource(struct platform_device *pdev, unsigned type, unsigned index);
+dma_addr_t dma_map_resource(struct device *dev, phys_addr_t address, size_t size, enum dma_data_direction direction, unsigned long attrs);
+int of_property_read_u32_index(const struct device_node *node, const char *name, u32 index, u32 *value);
+int enable_irq_wake(unsigned irq);
+int disable_irq_wake(unsigned irq);
+
 #define IPV6_ADDR_SCOPE_LINKLOCAL 2
 #define IPV6_ADDR_SCOPE_GLOBAL 14
 struct inet6_ifaddr { int unused; }; struct inet6_dev { int unused; }; struct ifacaddr6 { int unused; };
