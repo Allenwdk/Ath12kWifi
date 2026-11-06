@@ -32,6 +32,8 @@ static const void *g_match_data;
 extern int nw_board_wpss_start(void);
 extern int nw_board_glink_xmit(const void *packet, size_t length);
 extern void *nw_board_bar(void);
+extern void *nw_board_map_phys(uint64_t pa, size_t n);
+extern int nw_board_mac(unsigned char *address);
 
 static struct property *node_property(const struct device_node *node, const char *name)
 {
@@ -264,4 +266,73 @@ void nw_ahb_stop(void)
     ath11k_ahb_driver_exit();
     platform_device_unregister(&g_pdev);
     nw_qrtr_endpoint_down();
+}
+
+/* ---- remaining shim glue for the ath11k stack ---- */
+
+void *lx_ioremap(phys_addr_t pa, size_t n) { return nw_board_map_phys(pa, n); }
+void lx_iounmap(void *p) { (void)p; }
+void *devm_ioremap(struct device *dev, phys_addr_t pa, size_t n) { (void)dev; return lx_ioremap(pa, n); }
+int of_dma_configure(struct device *dev, struct device_node *node, bool force_dma) { (void)dev; (void)node; (void)force_dma; return 0; }
+
+void *dma_alloc_noncoherent(struct device *dev, size_t n, dma_addr_t *bus,
+                            enum dma_data_direction dir, gfp_t flags)
+{
+    (void)dev; (void)dir; (void)flags;
+    return lx_plat->dma_alloc(n, bus);
+}
+void dma_free_noncoherent(struct device *dev, size_t n, void *p, dma_addr_t bus,
+                          enum dma_data_direction dir)
+{
+    (void)dev; (void)dir;
+    lx_plat->dma_free(n, p, bus);
+}
+
+struct qcom_smem_state;
+struct qcom_smem_state *qcom_smem_state_get(struct device *dev, const char *con_id, unsigned *bit)
+{
+    static int state;
+    (void)dev; (void)con_id;
+    if (bit) *bit = 0;
+    return (struct qcom_smem_state *)&state;
+}
+void qcom_smem_state_put(struct qcom_smem_state *state) { (void)state; }
+
+int register_pm_notifier(struct notifier_block *notifier) { (void)notifier; return 0; }
+int unregister_pm_notifier(struct notifier_block *notifier) { (void)notifier; return 0; }
+
+int device_get_mac_address(struct device *dev, u8 *address)
+{
+    (void)dev;
+    return nw_board_mac(address);
+}
+
+int hex_dump_to_buffer(const void *buf, size_t len, int rowsize, int groupsize,
+                       char *linebuf, size_t linebuflen, bool ascii)
+{
+    (void)rowsize; (void)groupsize; (void)ascii;
+    const u8 *p = buf; size_t o = 0;
+    for (size_t i = 0; i < len && o + 3 < linebuflen; ++i) o += (size_t)snprintf(linebuf + o, linebuflen - o, "%02x", p[i]);
+    return (int)o;
+}
+
+struct bus_type mhi_bus_type = { .name = "mhi" };
+
+int nw_aes_siv_encrypt(const u8 *key, size_t key_length, const u8 *plain, size_t length,
+                       size_t count, const u8 *address[], size_t sizes[], u8 *output)
+{
+    (void)key; (void)key_length; (void)plain; (void)length; (void)count; (void)address; (void)sizes; (void)output;
+    return -1; /* FILS is disabled until the provider is wired. */
+}
+int nw_aes_siv_decrypt(const u8 *key, size_t key_length, const u8 *cipher, size_t length,
+                       size_t count, const u8 *address[], size_t sizes[], u8 *output)
+{
+    (void)key; (void)key_length; (void)cipher; (void)length; (void)count; (void)address; (void)sizes; (void)output;
+    return -1;
+}
+
+void *memset32(uint32_t *s, uint32_t v, size_t count)
+{
+    for (size_t i = 0; i < count; ++i) s[i] = v;
+    return s;
 }
