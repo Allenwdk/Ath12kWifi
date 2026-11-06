@@ -23,5 +23,5 @@ unsigned nw_wcn6750_query_timeout_ms(void);
 enum { NW_WCN6750_BDF_ELF = 1, NW_WCN6750_REGDB = 4, NW_WCN6750_BDF_CHUNK = 6144 };
 int nw_wcn6750_bdf_request(unsigned transaction, unsigned type, uint32_t file_id,
                           uint32_t segment, uint32_t total_size, uint32_t remaining,
-                          const uint8_t *data, uint8_t *out, size_t capacity);
+                          unsigned force_end, const uint8_t *data, uint8_t *out, size_t capacity);
 #endif

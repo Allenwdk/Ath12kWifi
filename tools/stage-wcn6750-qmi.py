@@ -71,7 +71,7 @@ int nw_wcn6750_query_request(unsigned message, unsigned transaction, uint8_t *ou
 }
 int nw_wcn6750_bdf_request(unsigned transaction, unsigned type, uint32_t file_id,
                           uint32_t segment, uint32_t total_size, uint32_t remaining,
-                          const uint8_t *data, uint8_t *out, size_t capacity) {
+                          unsigned force_end, const uint8_t *data, uint8_t *out, size_t capacity) {
     if (!data || !remaining || (type != NW_WCN6750_BDF_ELF && type != NW_WCN6750_REGDB))
         return -EINVAL;
     struct qmi_wlanfw_bdf_download_req_msg_v01 *request = kzalloc_obj(*request);
@@ -88,8 +88,9 @@ int nw_wcn6750_bdf_request(unsigned transaction, unsigned type, uint32_t file_id
     request->data_len = remaining > NW_WCN6750_BDF_CHUNK ? NW_WCN6750_BDF_CHUNK : remaining;
     memcpy(request->data, data, request->data_len);
     request->end_valid = 1;
-    request->end = remaining == request->data_len;
-    /* downstream icnss2 omits bdf_type; the firmware stores the blob as sent. */
+    request->end = force_end ? 1 : (remaining == request->data_len);
+    request->bdf_type_valid = 1;
+    request->bdf_type = type;   /* icnss2 sends the file type alongside the blob */
     size_t length = QMI_WLANFW_BDF_DOWNLOAD_REQ_MSG_V01_MAX_LEN;
     void *encoded = qmi_encode_message(QMI_REQUEST, QMI_WLANFW_BDF_DOWNLOAD_REQ_V01, &length,
                                        transaction, qmi_wlanfw_bdf_download_req_msg_v01_ei, request);
