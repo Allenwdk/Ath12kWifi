@@ -82,6 +82,8 @@ void pci_unregister_driver(struct pci_driver *drv);
 /* Platform/AHB devices use explicit adapter operations, independent of PCI. */
 struct platform_device { struct device dev; };
 struct platform_device_info { const char *name; struct device *parent; struct fwnode_handle *fwnode; u64 dma_mask; };
+struct resource;
+struct platform_driver { void (*shutdown)(struct platform_device *); int (*probe)(struct platform_device *); void (*remove)(struct platform_device *); struct device_driver driver; };
 #define to_platform_device(d) container_of(d, struct platform_device, dev)
 #define platform_get_drvdata(p) dev_get_drvdata(&(p)->dev)
 #define platform_set_drvdata(p, value) dev_set_drvdata(&(p)->dev, value)
@@ -96,8 +98,6 @@ void *devm_platform_get_and_ioremap_resource(struct platform_device *pdev, unsig
  int driver##_init(void) { return platform_driver_register(&(driver)); } \
  void driver##_exit(void) { platform_driver_unregister(&(driver)); }
 
-struct platform_driver { void (*shutdown)(struct platform_device *); int (*probe)(struct platform_device *); void (*remove)(struct platform_device *); struct device_driver driver; };
-struct platform_driver;
 struct resource;
 /* AHB operations are provided by the platform adapter, never by a success stub. */
 int platform_get_irq(struct platform_device *pdev, unsigned index);

@@ -21,6 +21,7 @@ src/nw_qrtr.c
 src/nw_qrtr_mhi.c
 src/nw_rfkill.c
 src/nw_wifi.c
+src/nw_ahb.c
 shim/src/lx_rt.c
 deps/linux/lib/rbtree.c
 deps/linux/lib/crypto/arc4.c
