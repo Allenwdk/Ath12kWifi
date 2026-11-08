@@ -25,6 +25,12 @@ static unsigned tx_count, tx_bytes, epoch;
 static bool stopping;
 static bool scan_ack_pending;
 static struct work_struct transmit_work;
+/* Published by the board through uke_wifi_station_set_hw(): the radio this
+ * station layer serves. nw_abi.h's counters live here too, so the board's
+ * progress line and the station path agree on one object. */
+struct nw_wifi_stats nw_wifi_stats;
+static struct ieee80211_hw *g_hw;
+void nw_wifi_hw_ready(struct ieee80211_hw *hw) {g_hw = hw;}
 static void transmit(void);
 static void transmit_run(struct work_struct *work) {
   (void)work; transmit(); nw_mainline_poll();
@@ -60,6 +66,15 @@ static void scan_snapshot(struct net_device *dev) {
     if (ssid && ssid->datalen <= 32) { out->ssid_len = ssid->datalen; memcpy(out->ssid, ssid->data, ssid->datalen); }
   }
   nw_wifi_stats.bss_seen = bss_count;
+  // Say what the list actually holds: five entries with no receive interrupt
+  // anywhere in the log is either a path we do not trace or a snapshot reading
+  // something that is not a BSS, and the bssid/ssid_len tell them apart.
+  { static unsigned traced; if (traced < 8) { traced++;
+      if (bss_count) lx_log(6, "wifi: bss_seen %u first %02x%02x%02x%02x%02x%02x ssid_len %u freq %u signal %d",
+                            bss_count, bsses[0].bssid[0], bsses[0].bssid[1], bsses[0].bssid[2],
+                            bsses[0].bssid[3], bsses[0].bssid[4], bsses[0].bssid[5], bsses[0].ssid_len,
+                            bsses[0].freq_mhz, bsses[0].signal_dbm);
+      else lx_log(6, "wifi: bss_seen 0"); } }
   lx_shared_spin_unlock(&boundary_lock); spin_unlock_bh(&rdev->bss_lock); rcu_read_unlock();
 }
 static int packet_read(void *context, size_t offset, void *destination, size_t length) {
@@ -319,6 +334,7 @@ void nw_mainline_run(void) {
     join_waiting = false; timed_out = true;
     memzero_explicit(&ui, sizeof(ui)); ui.operation = NW_CONTROL_DISCONNECT_REQUEST;
     clear_connection(NW_STA_IDLE); status.result = NW_RES_TIMEOUT; epoch++;
+    lx_log(4, "wifi: join deadline hit state %u result %u epoch %u", status.state, status.result, epoch);
   }
   lx_shared_spin_unlock(&boundary_lock);
   if (timed_out && nw_events.connect_done) nw_events.connect_done(NW_RES_TIMEOUT);
@@ -355,6 +371,7 @@ void nw_mainline_run(void) {
     int result = nw_cfg80211_event_begin(&b, bytes, sizeof(bytes), pending.operation, 0);
     if (!result && pending.operation == NW_CONTROL_JOIN_REQUEST) {
       result = nw_cfg80211_begin_attempt();
+      lx_log(4, "wifi: join begin_attempt result %d ssid_len %u freq %u", result, pending.ssid_length, pending.frequency);
       if (!result) {
         nw_cfg80211_event_begin(&b, bytes, sizeof(bytes), pending.operation, 0);
         result = nw_control_put(&b, NW_CONTROL_ATTR_SSID, pending.ssid, pending.ssid_length) ||
@@ -364,11 +381,13 @@ void nw_mainline_run(void) {
       }
     } else if (!result && pending.operation == NW_CONTROL_DISCONNECT_REQUEST) {
       result = nw_cfg80211_begin_attempt();
+      lx_log(4, "wifi: disconnect begin_attempt result %d", result);
       if (!result) nw_cfg80211_event_begin(&b, bytes, sizeof(bytes), pending.operation, 0);
     } else if (!result && pending.operation == NW_CONTROL_SCAN_REQUEST && pending.ssid_length) {
       result = nw_control_put(&b, NW_CONTROL_ATTR_SSID, pending.ssid, pending.ssid_length);
     }
     if (!result) result = nw_cfg80211_event_send(&b);
+    lx_log(4, "wifi: ui op %u event_begin/send result %d state %u", pending.operation, result, status.state);
     if (!result) {
       lx_shared_spin_lock(&boundary_lock);
       if (!memcmp(&ui, &pending, sizeof(ui))) {

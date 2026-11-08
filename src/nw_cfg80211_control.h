@@ -12,6 +12,8 @@ struct net_device *nw_cfg80211_primary(void);
 /* Starting an attempt closes the old interface before changing its generation. */
 int nw_cfg80211_begin_attempt(void);
 int nw_cfg80211_set_power(int enabled);
+/* One full scan through cfg80211/ath11k, for bring-up verification. */
+int nw_cfg80211_selftest_scan(void);
 int nw_cfg80211_event_begin(struct nw_control_builder *builder, void *bytes, size_t size, unsigned operation, int status);
 int nw_cfg80211_event_send(struct nw_control_builder *builder);
 #endif

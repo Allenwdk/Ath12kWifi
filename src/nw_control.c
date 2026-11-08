@@ -53,26 +53,32 @@ void nw_wifi_control_detach(uint64_t session) {
 static int enqueue_send(struct control_item *item) {
   lx_shared_spin_lock(&control_lock);
   if (!bound || !client || client->session != item->session) {
+    if (!bound) stats.enqueue_no_bound++; else stats.enqueue_no_client++;
     lx_shared_spin_unlock(&control_lock); release_message(item); return NW_CONTROL_NOT_READY;
   }
   if (stats.tx_items >= ITEM_LIMIT || item->capacity > TX_LIMIT - stats.tx_bytes) {
     stats.tx_full++; detach_locked(item->session); lx_shared_spin_unlock(&control_lock);
     release_message(item); wake_worker(); return NW_CONTROL_NO_MEMORY;
   }
-  push(&tx_head, &tx_tail, item); stats.tx_items++; stats.tx_bytes += item->capacity;
+  push(&tx_head, &tx_tail, item); stats.tx_items++; stats.tx_bytes += item->capacity; stats.enqueue_ok++;
   lx_shared_spin_unlock(&control_lock); wake_worker(); return NW_CONTROL_OK;
 }
 static void flush_send(void) {
+  lx_shared_spin_lock(&control_lock); stats.flush_calls++; lx_shared_spin_unlock(&control_lock);
   for (unsigned budget = 0; budget < 64; budget++) {
     lx_shared_spin_lock(&control_lock);
     struct control_item *item = tx_head; uint64_t epoch = writable_epoch;
     bool send = item && bound && client && client->session == item->session;
-    if (!item || (send && !tx_ready)) { lx_shared_spin_unlock(&control_lock); return; }
+    if (!item || (send && !tx_ready)) {
+      if (!item) stats.flush_no_item++; else stats.flush_tx_not_ready++;
+      lx_shared_spin_unlock(&control_lock); return;
+    }
     lx_shared_spin_unlock(&control_lock);
     int result = send ? transport.send(transport.context, item->session, item_bytes(item), item->length) : NW_CONTROL_SEND_CLOSED;
+    if (send) stats.flush_sent++; else stats.flush_closed++;
     lx_shared_spin_lock(&control_lock);
     if (result == NW_CONTROL_SEND_AGAIN) {
-      stats.send_retries++; if (epoch == writable_epoch) tx_ready = false;
+      stats.send_retries++; stats.flush_again++; if (epoch == writable_epoch) tx_ready = false;
       lx_shared_spin_unlock(&control_lock); return;
     }
     BUG_ON(pop(&tx_head, &tx_tail) != item); stats.tx_items--; stats.tx_bytes -= item->capacity;

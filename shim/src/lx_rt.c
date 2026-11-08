@@ -182,8 +182,25 @@ void lx_sleep_us(unsigned int us) {
 void lx_warn(const char *f, int l) { lx_log(4, "warning at %s:%d", f, l); }
 void lx_bug(const char *f, int l) { lx_log(3, "bug at %s:%d", f, l); lx_plat->halt(); for (;;) {} }
 void (*lx_log_tap)(int level, const char *line);
+struct log_va_format { const char *fmt; va_list *va; };
 void lx_log(int level, const char *fmt, ...) {
-  char b[256]; va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof b, fmt, ap); va_end(ap); lx_plat->log(level, b);
+  char b[256]; va_list ap; va_start(ap, fmt);
+  /* Linux printk expands %pV with the va_format argument; this libc prints the
+   * pointer instead. Two shapes reach here from the driver, both verified by
+   * searching the built tree: "%pV" (ath11k_info/err/warn) and "%s %pV"
+   * (__ath11k_dbg, which prefixes the debug mask name). Any other shape falls
+   * back to the plain format. */
+  if (fmt && !strcmp(fmt, "%pV")) {
+    const struct log_va_format *v = va_arg(ap, const struct log_va_format *);
+    if (v && v->fmt) { va_list cp; va_copy(cp, *v->va); vsnprintf(b, sizeof b, v->fmt, cp); va_end(cp); } else b[0] = 0;
+  } else if (fmt && !strcmp(fmt, "%s %pV")) {
+    const char *prefix = va_arg(ap, const char *);
+    const struct log_va_format *v = va_arg(ap, const struct log_va_format *);
+    char inner[192];
+    if (v && v->fmt) { va_list cp; va_copy(cp, *v->va); vsnprintf(inner, sizeof inner, v->fmt, cp); va_end(cp); } else inner[0] = 0;
+    snprintf(b, sizeof b, "%s %s", prefix ? prefix : "", inner);
+  } else vsnprintf(b, sizeof b, fmt, ap);
+  va_end(ap); lx_plat->log(level, b);
   if (lx_log_tap) lx_log_tap(level, b); }
 u32 lx_random_u32(void) { g_seed ^= g_seed << 13; g_seed ^= g_seed >> 17; g_seed ^= g_seed << 5; return g_seed; }
 
@@ -521,6 +538,16 @@ int device_for_each_child(struct device *d, void *data, int (*fn)(struct device 
   for (p = d->children.next; p != &d->children; p = n) { n = p->next; r = fn(container_of(p, struct device, sibling), data); if (r) break; }
   return r; }
 void lx_root_init(void) { device_initialize(&g_root); }
+/* The device every port publishes under. cfg80211 takes a reference on a
+ * wiphy's parent in device_add() and releases it in put_device(); a parent
+ * whose reference count was never established trips the BUG_ON in get_device
+ * the moment registration succeeds. Initialise the registry root once and
+ * hand it out, so the count is real. */
+struct device *lx_root_device(void) {
+  static int ready;
+  if (!ready) { device_initialize(&g_root); g_root.references = 1; ready = 1; }
+  return &g_root;
+}
 
 /* ids */
 int ida_alloc_range(struct ida *i, unsigned int lo, unsigned int hi, gfp_t f) {

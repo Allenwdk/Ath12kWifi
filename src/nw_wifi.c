@@ -2,8 +2,6 @@
 #include "lx_pci.h"
 #include "lx_plat.h"
 #include <net/mac80211.h>
-#include "core.h"
-#include "debug.h"
 #include "nw_mhi.h"
 #include "nw_qrtr.h"
 #include "nw_mainline.h"
@@ -11,6 +9,9 @@
 #include "nw_board.h"
 #include "nw_events.h"
 #include "nw_control_endpoint.h"
+#ifndef NW_PLATFORM_AHB
+#include "core.h"
+#include "debug.h"
 #include "pci.h"
 #include "dp_cmn.h"
 #include <linux/mhi.h>
@@ -19,16 +20,37 @@ int ath12k_wifi7_pci_init(void);
 void ath12k_wifi7_pci_exit(void);
 int mhi_init_hook(void);
 extern unsigned int ath12k_debug_mask;
+#else
+/* AHB backend: the WPSS is already running, ath11k's own MHI/QMI ride SMEM
+ * GLINK (nw_ahb.c supplies the object model), and the board owns the BAR, the
+ * DMA window and the 32 MSI vectors. Same lifecycle, different transport. */
+int nw_ahb_start(void);
+void nw_ahb_stop(void);
+extern unsigned int ath11k_debug_mask;
+#endif
 
+#ifndef NW_PLATFORM_AHB
+/* The ath12k image publishes these from here; the AHB stack publishes the same
+ * symbols from nw_mainline.c, so exactly one definition exists per image. */
 struct nw_wifi_stats nw_wifi_stats;
 static struct ieee80211_hw *g_hw;
 void nw_wifi_hw_ready(struct ieee80211_hw *hw) { g_hw = hw; }
+#endif
 int lx_init_cfg80211_init(void);
 int lx_init_ieee80211_init(void);
 void lx_exit_cfg80211_exit(void);
 void lx_exit_ieee80211_exit(void);
-static bool cfg_started, mac_started, pci_started, mhi_started, qrtr_started;
+static bool cfg_started, mac_started;
+#ifdef NW_PLATFORM_AHB
+/* nw_pci.c, which owns this pointer in the PCI image, is not built here. */
+const struct nw_board *nw_board;
+static bool ahb_started;
+#else
+static bool pci_started, mhi_started, qrtr_started;
 extern const struct bus_type mhi_bus_type;
+#endif
+
+#ifndef NW_PLATFORM_AHB
 
 /* The first time the MHI core reports the device's RAM dump state, the boot interface's registers say where the boot stopped. */
 static int has_text(const char *s, const char *w) {
@@ -197,9 +219,12 @@ static void log_tap(int level, const char *line) {
   lx_log(3, "rddm: mhistatus %08x mhictrl %08x ee %08x bhi-status %08x err %08x dbg %08x %08x %08x",
          readl(m + 0x48), readl(m + 0x38), readl(m + bhi + 0x28), readl(m + bhi + 0x2c), readl(m + bhi + 0x30), readl(m + bhi + 0x34),
          readl(m + bhi + 0x38), readl(m + bhi + 0x3c)); }
+#endif /* !NW_PLATFORM_AHB: diagnostics above read ath12k structures */
 
+#ifndef NW_PLATFORM_AHB
 /* The address of a radio whose firmware reports none (or a random default one): the board's file wlan_mac.bin (text, the address as twelve hex digits after the
- * last '='), else a locally administered address made up once. */
+ * last '='), else a locally administered address made up once. The AHB board
+ * answers device_get_mac_address() itself (nw_board_mac in the board driver). */
 static int hexval(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
 void nw_board_mac(u8 *a) {
   static u8 made[6]; static int have;
@@ -215,6 +240,7 @@ void nw_board_mac(u8 *a) {
     made[0] = (made[0] & 0xfe) | 0x02; have = 1; lx_log(4, "wifi: the firmware and the board give no address: a made-up one is used");
   }
   memcpy(a, made, 6); }
+#endif /* !NW_PLATFORM_AHB */
 
 void nw_wifi_irq_mode(int delivered) { lx_irq_polling(!delivered); }
 void nw_wifi_poll(void) { nw_mainline_poll(); nw_wifi_control_poll(); }
@@ -230,7 +256,25 @@ unsigned nw_wifi_wait_ms(unsigned maximum) {
 }
 void nw_wifi_set_platform(const struct lx_platform *p) { lx_plat = p; }
 int nw_wifi_start(const struct lx_platform *p, const struct nw_board *b) {
-  lx_plat = p; nw_board = b; ath12k_debug_mask = 0; /* Keep info/warnings and counters; skip HTT/WMI debug formatting in normal traffic. */
+  lx_plat = p; nw_board = b;
+#ifdef NW_PLATFORM_AHB
+  /* ath11k_debug_mask belongs to the board here: it already applied the
+   * ath11k-debug-mask boot argument before calling in. */
+  nw_wifi_buffer_pool_configure(1024 * 1024);
+  lx_root_init();
+  int r = nw_mainline_init(); if (r) goto fail;
+  r = lx_init_cfg80211_init(); if (r) goto fail;
+  cfg_started = true;
+  r = lx_init_ieee80211_init(); if (r) goto fail;
+  mac_started = true;
+  nw_wifi_stats.stage = 1;
+  /* nw_ahb_start() initialises QRTR over GLINK and registers the ath11k AHB
+   * platform device; the board started the WPSS before calling in. */
+  r = nw_ahb_start();
+  if (r) goto fail;
+  ahb_started = true; nw_wifi_stats.stage = 2; return 0;
+#else
+  ath12k_debug_mask = 0; /* Keep info/warnings and counters; skip HTT/WMI debug formatting in normal traffic. */
   nw_wifi_buffer_pool_configure(1024 * 1024);
   lx_root_init(); lx_log_tap = log_tap; nw_qrtr_init();
   int r = nw_mainline_init(); if (r) goto fail;
@@ -246,15 +290,19 @@ int nw_wifi_start(const struct lx_platform *p, const struct nw_board *b) {
   r = ath12k_wifi7_pci_init();
   if (r) goto fail;
   pci_started = true; nw_wifi_stats.stage = 2; return 0;
+#endif
 fail:
   nw_wifi_stats.last_err = r; nw_wifi_stop(); lx_log(3, "wifi: driver start failed: %d", r); return r;
 }
 /* Returns nonzero while traffic moves (frames arrived or frames wait to be sent): the board then calls again at once instead of sleeping.
  * lx_pump's own result is no guide, every handler is offered a look on each call. */
 int nw_wifi_step(void) {
-  static unsigned last_frames; nw_wifi_control_poll(); lx_pump(); nw_mainline_run(); wmi_stuck();
+  static unsigned last_frames; nw_wifi_control_poll(); lx_pump(); nw_mainline_run();
+#ifndef NW_PLATFORM_AHB
+  wmi_stuck();
+#endif
   static u64 next_signal;
-  if (g_hw && lx_now_ms() >= next_signal) {
+  if (nw_wifi_stats.stage >= 4 && lx_now_ms() >= next_signal) {
     next_signal = lx_now_ms() + 1000;
     char link[128]; nw_wifi_link_state(link, sizeof(link));
   }
@@ -262,10 +310,17 @@ int nw_wifi_step(void) {
   return moved || nw_mainline_pending() || nw_wifi_control_pending() || lx_next_wait_ms(1000) == 0; }
 void nw_wifi_stop(void) {
   nw_mainline_shutdown(); nw_wifi_control_shutdown();
+#ifdef NW_PLATFORM_AHB
+  if (ahb_started) { nw_ahb_stop(); ahb_started = false; }
+#else
   if (pci_started) { ath12k_wifi7_pci_exit(); pci_started = false; }
   if (qrtr_started) { nw_qrtr_mhi_unregister(); qrtr_started = false; }
   if (mhi_started) { bus_unregister(&mhi_bus_type); mhi_started = false; }
+#endif
   if (mac_started) { lx_exit_ieee80211_exit(); mac_started = false; }
   if (cfg_started) { lx_exit_cfg80211_exit(); cfg_started = false; }
-  g_hw = NULL; nw_wifi_buffer_pool_configure(0);
+#ifndef NW_PLATFORM_AHB
+  g_hw = NULL;
+#endif
+  nw_wifi_buffer_pool_configure(0);
 }

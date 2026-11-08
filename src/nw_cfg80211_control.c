@@ -72,7 +72,10 @@ static int scan(struct cfg80211_registered_device *rdev, const struct nw_control
   size_t ie_offset = ssid_offset + (ssid_bytes / 33) * sizeof(struct cfg80211_ssid);
   struct cfg80211_scan_request_int *request = kzalloc(ie_offset + ie_bytes, GFP_KERNEL);
   if (!request) return -ENOMEM;
-  request->req.ssids = (void *)((u8 *)request + ssid_offset);
+  // An empty SSID list means "wildcard scan" and cfg80211 requires ssids to be
+  // NULL then: rdev_scan() rejects n_ssids == 0 with a non-NULL ssids pointer
+  // (-EINVAL) before the driver is ever called.
+  request->req.ssids = ssid_bytes ? (void *)((u8 *)request + ssid_offset) : NULL;
   request->req.n_ssids = ssid_bytes / 33;
   for (unsigned i = 0; i < request->req.n_ssids; i++) {
     if (ssids[i * 33] > IEEE80211_MAX_SSID_LEN) { kfree(request); return -EINVAL; }
@@ -345,6 +348,14 @@ static int request_locked(struct cfg80211_registered_device *rdev, const struct 
 }
 static int native_request(void *unused, uint64_t session, const struct nw_control_view *request, struct nw_control_builder *reply) {
   (void)unused;
+  // Join-critical requests from the supplicant: AUTHENTICATE(4), ASSOCIATE(5),
+  // SET_KEY(7), SET_PORT(8), TX_EAPOL(9), REPORT_RESULT(12). Log the gate
+  // result so a stalled SME is distinguishable from a request that never came.
+  const unsigned op = request->header.operation;
+  if (op == 4 || op == 5 || op == 7 || op == 8 || op == 9 || op == 12)
+    lx_log(4, "wifi: native req op %u session %llu gen %llu owner %llu gen %llu primary %d radio %d",
+           op, session, request->header.generation, owner, generation,
+           !!(primary && primary->registered), !!radio_enabled);
   nw_control_reply_state(reply, generation, 0);
   if (session != owner) return NW_CONTROL_STALE;
   if (!primary || !primary->registered) return NW_CONTROL_NOT_READY;
@@ -369,6 +380,22 @@ static int native_request(void *unused, uint64_t session, const struct nw_contro
     result = request_locked(rdev, request, reply);
     wiphy_unlock(&rdev->wiphy);
   } else result = common_error(result);
+  rtnl_unlock();
+  return result;
+}
+/* Board-initiated scan: the same request path the control channel uses, with no
+ * SSID/channel list (a full scan). Used to prove cfg80211 -> ath11k -> firmware
+ * before a userspace client exists; it never invents results. */
+int nw_cfg80211_selftest_scan(void) {
+  if (!primary || !primary->registered) return NW_CONTROL_NOT_READY;
+  struct cfg80211_registered_device *rdev = wiphy_to_rdev(primary->ieee80211_ptr->wiphy);
+  rtnl_lock();
+  int result = radio_enabled ? dev_open(primary, NULL) : -ENETDOWN;
+  if (!result) {
+    wiphy_lock(&rdev->wiphy);
+    result = scan(rdev, NULL);
+    wiphy_unlock(&rdev->wiphy);
+  }
   rtnl_unlock();
   return result;
 }

@@ -1,2 +1,4 @@
 deps/
 out/
+__pycache__/
+*.pyc

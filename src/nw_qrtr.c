@@ -133,7 +133,7 @@ void nw_qrtr_rx(const void *pkt, size_t len) {
     send_remote(QRTR_TYPE_RESUME_TX, dn, dp, sn, sp, &r, sizeof r, 0);
   }
   switch (type) {
-  case QRTR_TYPE_DATA: { struct sock *s = find_port(dp); lx_log(7, "qrtr: data from %u:%x to port %x, %u bytes%s", sn, sp, dp, size, s ? "" : " (no socket)"); if (s) deliver(s, sn, sp, pl, size); else lx_log(6, "qrtr: no port %x", dp); break; }
+  case QRTR_TYPE_DATA: { struct sock *s = find_port(dp); if (s) deliver(s, sn, sp, pl, size); break; }
   case QRTR_TYPE_RESUME_TX: case QRTR_TYPE_PING: case QRTR_TYPE_EXIT: break;
   default: ns_handle(sn, sp, (const struct qrtr_ctrl_pkt *)pl, size); break;
   }

@@ -17,6 +17,14 @@ flags = ["-std=gnu11", "-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-f
     "-DCONFIG_CFG80211=1", "-DCONFIG_MAC80211=1", "-DCONFIG_MAC80211_STA_HASH_MAX_SIZE=0",
     '-DCONFIG_MAC80211_RC_DEFAULT=""', "-fno-strict-aliasing", "-fwrapv", "-ffunction-sections",
     "-Wno-incompatible-pointer-types", "-Wno-pointer-sign", "-Wno-macro-redefined", "-include", "lx_pci.h"]
+# The test is a host binary but the module sources must see the module's own
+# errno (lx.h declares its own loff_t, which glibc's sys/types.h collides with).
+# A one-file include shim in front of the host SDK forwards <errno.h> only.
+test_include = out / "include"
+test_include.mkdir(exist_ok=True)
+(test_include / "errno.h").write_text('#include "%s"\n' % (root / "shim/libc/errno.h"))
+flags += ["-I", str(test_include),
+          "-isystem", subprocess.check_output([compiler, "-print-resource-dir"], text=True).strip() + "/include"]
 for directory in ("shim/include", "include", "src", "out/pinned", "out"):
     flags += ["-I", str(root / directory)]
 excluded = {"src/nw_wifi.c", "src/nw_mainline.c", "src/nw_debug.c", "src/nw_mhi.c", "src/nw_pci.c", "src/nw_qrtr.c",

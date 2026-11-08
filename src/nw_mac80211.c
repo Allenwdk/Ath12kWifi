@@ -14,6 +14,7 @@ static inline u32 ieee80211_channel_to_khz_lx(struct ieee80211_channel *c) { ret
 void nw_wifi_set_hooks(const struct nw_wifi_hooks *h) { g_hooks = *h; }
 struct ieee80211_hw *nw_wifi_hw(void) { return g_hw; }
 
+
 struct ieee80211_hw *ieee80211_alloc_hw_nm(size_t priv_len, const struct ieee80211_ops *ops, const char *name) {
   (void)name; struct ieee80211_hw *hw = lx_alloc(sizeof *hw, 1);
   struct wiphy *w = lx_alloc(sizeof *w + sizeof(void *) * 2, 1);

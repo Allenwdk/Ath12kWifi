@@ -19,6 +19,10 @@ struct nw_control_dispatch {
 };
 struct nw_control_stats {
   uint64_t accepted, dispatched, replies, events, malformed, stale_sessions, rx_full, tx_full, send_retries;
+  /* Pure diagnostics: where a queued reply goes. enqueue_send() outcomes and
+   * flush_send() outcomes explain a zero-TX transport without changing it. */
+  uint64_t enqueue_ok, enqueue_no_client, enqueue_no_bound, flush_calls,
+           flush_sent, flush_closed, flush_no_item, flush_tx_not_ready, flush_again;
   size_t rx_bytes, tx_bytes; unsigned rx_items, tx_items;
   uint64_t connections, disconnections, active_session;
   unsigned last_operation, last_status;

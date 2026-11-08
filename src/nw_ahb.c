@@ -14,6 +14,7 @@
 extern int ath11k_ahb_driver_init(void);
 extern void ath11k_ahb_driver_exit(void);
 
+extern volatile uint32_t native_ufs_msi_iova __attribute__((weak_import));
 #define WCN6750_MSI_PA 0x17110040ULL
 #define WCN6750_MSI_SPI_BASE 0x300U
 #define WCN6750_BAR_PA 0x61e00000ULL
@@ -34,6 +35,7 @@ extern int nw_board_glink_xmit(const void *packet, size_t length);
 extern void *nw_board_bar(void);
 extern void *nw_board_map_phys(uint64_t pa, size_t n);
 extern int nw_board_mac(unsigned char *address);
+extern uint64_t nw_board_msi_iova(void);
 
 static struct property *node_property(const struct device_node *node, const char *name)
 {
@@ -197,6 +199,11 @@ struct platform_device *platform_device_register_full(const struct platform_devi
 {
     (void)info;
     g_pdev.dev.of_node = &g_node;
+    /* The port's root device: ath11k passes this as the wiphy parent, and
+     * device_add() takes a reference on it. Leaving it uninitialised trips the
+     * get_device() BUG_ON as soon as registration succeeds. */
+    g_pdev.dev.parent = lx_root_device();
+    device_initialize(&g_pdev.dev);
     if (g_driver && probe_matches(g_driver) && g_driver->probe) g_driver->probe(&g_pdev);
     return &g_pdev;
 }
@@ -209,7 +216,16 @@ dma_addr_t dma_map_resource(struct device *dev, phys_addr_t address, size_t size
                             enum dma_data_direction direction, unsigned long attrs)
 {
     (void)dev; (void)size; (void)direction; (void)attrs;
-    return (dma_addr_t)address; /* Identity: the MSI doorbell is a physical register. */
+    if (address == WCN6750_MSI_PA) {
+        /* The endpoint must write the SoC's MSI bitmap (qcom,pci-msi@0x17110040), which ShengUfs now
+         * maps into this bank at native_ufs_msi_iova. Bit N of that register raises level SPI 0x300+N,
+         * so the GIC latches every vector; the old host memory sink kept only the last write. */
+        if (&native_ufs_msi_iova != 0 && native_ufs_msi_iova)
+            return (dma_addr_t)native_ufs_msi_iova;
+        lx_log(3, "UKE WIFI AHB: MSI doorbell IOVA missing, memory sink in use");
+        return nw_board_msi_iova();
+    }
+    return (dma_addr_t)address;
 }
 
 
@@ -240,6 +256,7 @@ static int glink_xmit(void *ctx, const void *pkt, size_t len)
 
 void nw_ahb_qrtr_input(const void *packet, size_t length) { nw_qrtr_rx(packet, length); }
 void nw_ahb_qrtr_down(void) { nw_qrtr_endpoint_down(); }
+void nw_ahb_qrtr_up(void) { nw_qrtr_set_endpoint(glink_xmit, 0); }
 
 int nw_ahb_start(void)
 {
