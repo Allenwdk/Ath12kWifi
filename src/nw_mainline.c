@@ -12,6 +12,7 @@ static spinlock_t boundary_lock;
 static struct nw_wifi_status status;
 static struct nw_bss_info *bsses;
 static unsigned bss_count, rx_drops;
+static u64 bss_snapshot_ms;
 struct ui_request { unsigned operation, frequency; u8 ssid[32], ssid_length, bssid[6], has_bssid; char password[64]; u8 password_length, enabled; };
 static struct ui_request ui;
 static struct { bool pending, enabled; unsigned revision; } radio;
@@ -49,8 +50,9 @@ static int status_result(int result) {
 static void scan_snapshot(struct net_device *dev) {
   struct cfg80211_registered_device *rdev = wiphy_to_rdev(dev->ieee80211_ptr->wiphy);
   struct cfg80211_internal_bss *entry;
+  const u64 now = lx_now_ms();
   rcu_read_lock(); spin_lock_bh(&rdev->bss_lock); lx_shared_spin_lock(&boundary_lock);
-  bss_count = 0;
+  bss_count = 0; bss_snapshot_ms = now;
   list_for_each_entry(entry, &rdev->bss_list, list) {
     if (bss_count == UI_BSS_MAX) break;
     const struct cfg80211_bss_ies *ies = rcu_dereference(entry->pub.ies);
@@ -209,6 +211,9 @@ int nw_wifi_scan(const u8 *ssid, size_t length) {
   if (length > 32 || (length && !ssid)) return -EINVAL;
   lx_shared_spin_lock(&boundary_lock);
   if (stopping || !radio.enabled) { lx_shared_spin_unlock(&boundary_lock); return -ENETDOWN; }
+  if (join_waiting || (status.state >= NW_STA_AUTH && status.state < NW_STA_UP)) {
+    lx_shared_spin_unlock(&boundary_lock); return -EBUSY;
+  }
   if (scan_waiting) { lx_shared_spin_unlock(&boundary_lock); return 0; } /* Coalesce duplicate UI scan requests. */
   if (!ui.operation || ui.operation == NW_CONTROL_SCAN_REQUEST) {
     memzero_explicit(&ui, sizeof(ui)); ui.operation = NW_CONTROL_SCAN_REQUEST;
@@ -257,7 +262,13 @@ int nw_wifi_bss_count(void) { lx_shared_spin_lock(&boundary_lock); unsigned coun
 int nw_wifi_bss_get(int index, struct nw_bss_info *out) {
   if (!out) return -EINVAL; lx_shared_spin_lock(&boundary_lock);
   int result = index < 0 || (unsigned)index >= bss_count ? -ENOENT : 0;
-  if (!result) *out = bsses[index]; lx_shared_spin_unlock(&boundary_lock); return result;
+  if (!result) {
+    *out = bsses[index];
+    const u64 now = lx_now_ns() / 1000000ULL;
+    const u64 elapsed = now > bss_snapshot_ms ? now - bss_snapshot_ms : 0;
+    out->age_ms = min_t(u64, UINT32_MAX, (u64)out->age_ms + elapsed);
+  }
+  lx_shared_spin_unlock(&boundary_lock); return result;
 }
 void nw_wifi_status_get(struct nw_wifi_status *out) { lx_shared_spin_lock(&boundary_lock); *out = status; lx_shared_spin_unlock(&boundary_lock); }
 void nw_mainline_rate_update(const u8 *bssid, unsigned rate) {

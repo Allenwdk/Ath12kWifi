@@ -91,6 +91,7 @@ struct workqueue_struct *system_power_efficient_wq = &default_queue;
 struct workqueue_struct *system_bh_wq = &bottom_half_queue, *system_long_wq = &default_queue;
 static bool work_runnable(const struct work_struct *work) {
   if (is_running(work)) return false;
+  if ((work->queue->flags & LX_WQ_TOPLEVEL) && (g_depth > 1 || g_nrunning)) return false;
   if (__atomic_load_n(&mutexes_held, __ATOMIC_ACQUIRE) && !(work->queue->flags & LX_WQ_IO_COMPLETION)) {
     bool allowed = false;
     for (unsigned i = 0; i < flushing_depth; i++) {

@@ -91,7 +91,7 @@ static int change_station(struct wiphy *wiphy, struct net_device *dev, const u8 
   assert(parameters->listen_interval == -1 && parameters->support_p2p_ps == -1 && parameters->sta_flags_set == BIT(NL80211_STA_FLAG_AUTHORIZED));
   ports++; return 0;
 }
-static int tx_port(struct wiphy *wiphy, struct net_device *dev, const void *frame, size_t length,
+static int tx_port(struct wiphy *wiphy, struct net_device *dev, const u8 *frame, size_t length,
   const u8 *destination, __be16 protocol, bool no_encrypt, int link, u64 *cookie) {
   (void)wiphy; (void)dev; locked(); assert(length == 4 && frame && ether_addr_equal(destination, ap));
   assert(protocol == cpu_to_be16(ETH_P_PAE) && no_encrypt && link == -1); *cookie = 0x123456789abULL; eapols++; return 0;
@@ -148,7 +148,7 @@ int main(void) {
   assert(!nw_wifi_control_transport_set(&transport)); assert(!nl80211_init());
   const struct nw_cfg80211_observer callbacks = { .event = observe }; nw_cfg80211_observe(&callbacks);
   nl80211_notify_iface(rdev, &wdev, NL80211_CMD_NEW_INTERFACE);
-  assert(!nw_wifi_control_attach(&socket_owner)); begin(NW_CONTROL_INFO); assert(exchange() == NW_CONTROL_OK && opens == 1);
+  assert(!nw_wifi_control_attach(&socket_owner)); begin(NW_CONTROL_INFO); assert(exchange() == NW_CONTROL_OK && !opens);
   assert(registrations == 1);
   begin(NW_CONTROL_GET_CHANNELS); assert(exchange() == NW_CONTROL_OK);
   struct nw_control_view channels; size_t channel_length;

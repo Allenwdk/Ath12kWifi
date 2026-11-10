@@ -243,6 +243,9 @@ int lx_cancel_delayed(struct delayed_work *d);
 /* Native executor role: callbacks that deliver IRQ/timer/device completions
  * may run through a synchronous driver's wait; ordinary control work waits. */
 #define LX_WQ_IO_COMPLETION (1u << 29)
+/* Interface lifecycle work can synchronously cancel ordinary driver work.
+ * Run it only on the outer dispatch pass, with no ancestor to cancel. */
+#define LX_WQ_TOPLEVEL (1u << 30)
 struct timer_list { struct delayed_work d; void (*function)(struct timer_list *); unsigned long expires; };
 #define timer_pending(t) ((t)->d.armed || (t)->d.work.queued)
 #define timer_setup(t, f, fl) do { (t)->function = (f); INIT_DELAYED_WORK(&(t)->d, 0); } while (0)

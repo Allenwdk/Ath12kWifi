@@ -36,6 +36,8 @@ static const struct lx_platform platform = { .now_ms = now, .sleep_ms = sleep_ms
   .alloc = heap_alloc, .free = heap_free, .halt = halt, .log = log_line };
 static uint64_t session;
 static unsigned opened, closed, dispatched, sent, send_attempts;
+static struct work_struct firmware_work;
+static bool teardown_test;
 static bool blocked, wake_in_send, in_dispatch;
 static _Thread_local bool socket_callback;
 static uint8_t last_reply[8192]; static size_t last_length;
@@ -48,7 +50,17 @@ static int send_message(void *context, uint64_t id, const void *bytes, size_t le
 }
 static void wake(void *context) { (void)context; __atomic_fetch_add(&wakes, 1u, __ATOMIC_RELAXED); }
 static void owner_opened(void *context, uint64_t id) { (void)context; assert(!socket_callback && id == session); opened++; }
-static void owner_closed(void *context, uint64_t id) { (void)context; assert(!socket_callback && id); closed++; }
+static void owner_closed(void *context, uint64_t id) {
+  (void)context; assert(!socket_callback && id);
+  if (teardown_test) cancel_work_sync(&firmware_work);
+  closed++;
+}
+static void firmware_wait(struct work_struct *work) {
+  assert(work == &firmware_work);
+  nw_wifi_control_detach(session); nw_wifi_control_poll();
+  lx_delay_ms(1);
+  assert(!closed); /* The nested pump cannot cancel its own ancestor. */
+}
 static int request(void *context, uint64_t id, const struct nw_control_view *view, struct nw_control_builder *reply) {
   (void)context; assert(!socket_callback && !in_dispatch && id == session); in_dispatch = true; dispatched++;
   lx_delay_ms(1); /* A wait must not reenter the control dispatcher. */
@@ -103,7 +115,10 @@ int main(void) {
   struct nw_control_stats stats; nw_wifi_control_stats_get(&stats); assert(stats.tx_items == 1 && stats.send_retries == 1);
   unsigned before = sent; blocked = false; nw_wifi_control_writable(session); drain(); assert(sent == before + 1);
   wake_in_send = true; assert(!nw_wifi_control_receive(session, length, copy_message, bytes)); drain(); assert(sent == before + 2);
-  nw_wifi_control_detach(session); drain(); assert(closed == 1);
+  teardown_test = true;
+  INIT_WORK(&firmware_work, firmware_wait); queue_work(system_wq, &firmware_work);
+  lx_pump(); drain(); assert(closed == 1);
+  teardown_test = false;
   uint64_t previous = session; assert(!nw_wifi_control_attach(&session) && session != previous);
   assert(nw_wifi_control_receive(previous, length, copy_message, bytes) == NW_CONTROL_NOT_READY);
   length = packet(bytes, NW_CONTROL_REQUEST, NW_CONTROL_INFO, session, 7);

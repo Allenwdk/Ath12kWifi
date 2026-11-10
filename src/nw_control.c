@@ -16,6 +16,10 @@ static struct nw_control_transport transport;
 static struct nw_control_dispatch dispatch;
 static struct nw_control_stats stats;
 static struct work_struct control_work;
+/* A close, power change or join can cancel firmware work. Nested pumps
+ * still collect requests and run completions, but cannot close an interface
+ * while a work item it must cancel is on the dispatcher stack. */
+static struct workqueue_struct control_queue = { .max_active = 1, .flags = LX_WQ_TOPLEVEL, .name = "native-control" };
 static uint64_t next_session, writable_epoch;
 static bool bound, tx_ready = true;
 #define RX_LIMIT (256u * 1024u)
@@ -193,7 +197,7 @@ int nw_wifi_control_pending(void) {
   lx_shared_spin_lock(&control_lock); int pending = rx_head != NULL || (tx_head && (tx_ready || !client || tx_head->session != client->session));
   lx_shared_spin_unlock(&control_lock); return pending;
 }
-void nw_wifi_control_poll(void) { if (nw_wifi_control_pending()) queue_work(system_wq, &control_work); }
+void nw_wifi_control_poll(void) { if (nw_wifi_control_pending()) queue_work(&control_queue, &control_work); }
 void nw_wifi_control_stats_get(struct nw_control_stats *out) {
   lx_shared_spin_lock(&control_lock); *out = stats; out->active_session = client ? client->session : 0; lx_shared_spin_unlock(&control_lock);
 }

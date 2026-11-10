@@ -373,8 +373,11 @@ static int native_request(void *unused, uint64_t session, const struct nw_contro
   }
   struct cfg80211_registered_device *rdev = wiphy_to_rdev(primary->ieee80211_ptr->wiphy);
   rtnl_lock();
-  /* ndo_open and netdev notifiers take the wiphy mutex internally. */
-  int result = radio_enabled ? dev_open(primary, NULL) : 0;
+  /* INFO and cached reads do not require a firmware vdev. In particular,
+   * keep supplicant startup separate from the first potentially slow open.
+   * ndo_open and netdev notifiers take the wiphy mutex internally. */
+  const bool read_only = op == NW_CONTROL_INFO || op == NW_CONTROL_GET_BSS || op == NW_CONTROL_GET_CHANNELS;
+  int result = radio_enabled && !read_only ? dev_open(primary, NULL) : 0;
   if (!result) {
     wiphy_lock(&rdev->wiphy);
     result = request_locked(rdev, request, reply);

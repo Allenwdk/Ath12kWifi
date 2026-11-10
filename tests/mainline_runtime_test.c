@@ -15,7 +15,7 @@ int backtrace(void **, int);
 void backtrace_symbols_fd(void *const *, int, int);
 struct nw_wifi_stats nw_wifi_stats;
 static u64 ticks;
-static unsigned allocations, frees, ready_count, starts, stops, interfaces;
+static unsigned allocations, frees, starts, stops, interfaces;
 static unsigned preemption_depth, scan_completions;
 static void disable_preemption(void) { preemption_depth++; }
 static void enable_preemption(void) { assert(preemption_depth); preemption_depth--; }
@@ -48,7 +48,6 @@ static int firmware(const char *name, const u8 **bytes, size_t *length) { (void)
 static const struct lx_platform platform = { .now_ms = now, .sleep_ms = sleep_ms, .poll = poll,
   .halt = halt, .log = log_line, .alloc = allocate, .free = release, .dma_alloc = dma_allocate,
   .dma_free = dma_release, .fw_get = firmware, .preempt_disable = disable_preemption, .preempt_enable = enable_preemption };
-void nw_wifi_hw_ready(struct ieee80211_hw *hw) { assert(hw == expected_hw); ready_count++; }
 static int transport_send(void *context, uint64_t owner, const void *bytes, size_t length) {
   (void)context; (void)owner; struct nw_control_view view; assert(!nw_control_decode(bytes, length, &view));
   if (view.header.operation == NW_CONTROL_WIRELESS_EVENT) {
@@ -141,6 +140,7 @@ static void join_completion_and_signal(void) {
   assert(!nw_control_put_u32(&builder, NW_CONTROL_ATTR_SIGNAL, (u32)-46));
   assert(!nw_control_decode(bytes, builder.length, &view)); event(NW_CONTROL_ASSOC_RESULT, 0, &view);
   assert(status.state == NW_STA_KEYS && status.signal_dbm == -46 && !bss_count);
+  assert(nw_wifi_scan(NULL, 0) == -EBUSY);
   authorized_fixture(); assert(join_completions == 2);
   nw_mainline_signal_update(address, -40); assert(signal_updates == 1 && status.signal_dbm == -40);
   nw_mainline_signal_update(address, -41); nw_mainline_signal_update(other, -60);
@@ -185,8 +185,13 @@ static void power_and_scan_ordering(struct net_device *dev) {
   assert(scan_waiting && ui.operation == NW_CONTROL_SCAN_REQUEST); /* No user daemon has connected yet. */
   assert(!nw_wifi_scan(NULL, 0)); ticks += 12001; nw_mainline_run();
   assert(!scan_waiting && !ui.operation && scan_completions == 1);
+  status.state = NW_STA_UP;
+  assert(!nw_wifi_scan(NULL, 0) && scan_waiting);
+  nw_mainline_run(); assert(status.state == NW_STA_UP);
+  ticks += 12001; nw_mainline_run();
+  assert(!scan_waiting && status.state == NW_STA_UP && scan_completions == 2);
   nw_wifi_disconnect(); assert(!nw_wifi_scan(NULL, 0) && ui.operation == NW_CONTROL_DISCONNECT_REQUEST);
-  nw_mainline_run(); assert(scan_completions == 2); /* Scan cannot replace a queued disconnect either. */
+  nw_mainline_run(); assert(scan_completions == 3); /* Scan cannot replace a queued disconnect either. */
   nw_wifi_power(1); nw_mainline_run();
 }
 static void notification_boundary(struct net_device *dev) {
@@ -235,7 +240,7 @@ int main(void) {
   u8 address[] = {2,1,2,3,4,5}; SET_IEEE80211_PERM_ADDR(expected_hw, address);
   assert(!ieee80211_register_hw(expected_hw));
   for (unsigned i = 0; i < 10; i++) { lx_pump(); ticks++; }
-  struct net_device *dev = nw_cfg80211_primary(); assert(dev && ready_count == 1 && nw_wifi_stats.stage == 4);
+  struct net_device *dev = nw_cfg80211_primary(); assert(dev && g_hw == expected_hw && nw_wifi_stats.stage == 4);
   struct nw_wifi_status state; nw_wifi_status_get(&state); assert(state.channels == 1 && !memcmp(state.mac, address, 6));
   rtnl_lock(); assert(!dev_open(dev, NULL)); rtnl_unlock();
   assert(starts == 1 && interfaces == 1);
