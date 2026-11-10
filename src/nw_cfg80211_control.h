@@ -11,6 +11,7 @@ void nw_cfg80211_observe(const struct nw_cfg80211_observer *observer);
 struct net_device *nw_cfg80211_primary(void);
 /* Starting an attempt closes the old interface before changing its generation. */
 int nw_cfg80211_begin_attempt(void);
+int nw_cfg80211_prepare_scan(void);
 int nw_cfg80211_set_power(int enabled);
 /* One full scan through cfg80211/ath11k, for bring-up verification. */
 int nw_cfg80211_selftest_scan(void);

@@ -224,7 +224,10 @@ static int set_key(struct cfg80211_registered_device *rdev, const struct nw_cont
   const u8 *address = pairwise ? span(request, NW_CONTROL_ATTR_BSSID, ETH_ALEN) : NULL;
   if (pairwise && (!address || !is_valid_ether_addr(address))) return -EINVAL;
   if (!cfg80211_valid_key_idx(rdev, index, pairwise)) return -EINVAL;
-  if (flags & NW_CONTROL_KEY_DELETE) return rdev->ops->del_key ? rdev_del_key(rdev, primary, -1, index, pairwise, address) : -EOPNOTSUPP;
+  if (flags & NW_CONTROL_KEY_DELETE) {
+    if (!netif_running(primary)) return 0; /* A closed interface has no installed keys. */
+    return rdev->ops->del_key ? rdev_del_key(rdev, primary, -1, index, pairwise, address) : -EOPNOTSUPP;
+  }
   if (!rdev->ops->add_key || !cipher_supported(&rdev->wiphy, cipher)) return -EOPNOTSUPP;
   size_t key_length, sequence_length;
   struct key_params key = { .cipher = cipher, .mode = NL80211_KEY_RX_TX };
@@ -373,11 +376,14 @@ static int native_request(void *unused, uint64_t session, const struct nw_contro
   }
   struct cfg80211_registered_device *rdev = wiphy_to_rdev(primary->ieee80211_ptr->wiphy);
   rtnl_lock();
-  /* INFO and cached reads do not require a firmware vdev. In particular,
-   * keep supplicant startup separate from the first potentially slow open.
-   * ndo_open and netdev notifiers take the wiphy mutex internally. */
-  const bool read_only = op == NW_CONTROL_INFO || op == NW_CONTROL_GET_BSS || op == NW_CONTROL_GET_CHANNELS;
-  int result = radio_enabled && !read_only ? dev_open(primary, NULL) : 0;
+  /* Supplicant startup clears keys and reports link state on a closed
+   * interface. Opening the firmware vdev here can outlast its RPC deadline. */
+  uint32_t flags;
+  const bool delete_key = op == NW_CONTROL_SET_KEY &&
+    !nw_control_get_u32(request, NW_CONTROL_ATTR_KEY_FLAGS, &flags) && (flags & NW_CONTROL_KEY_DELETE);
+  const bool needs_open = !delete_key && op != NW_CONTROL_INFO && op != NW_CONTROL_GET_BSS &&
+    op != NW_CONTROL_GET_CHANNELS && op != NW_CONTROL_SET_OPERSTATE && op != NW_CONTROL_SET_PORT;
+  int result = radio_enabled && needs_open ? dev_open(primary, NULL) : 0;
   if (!result) {
     wiphy_lock(&rdev->wiphy);
     result = request_locked(rdev, request, reply);
@@ -420,6 +426,14 @@ int nw_cfg80211_begin_attempt(void) {
   if (!radio_enabled) return -ERFKILL;
   rtnl_lock(); dev_close(primary); generation++; snapshot_free();
   int result = dev_open(primary, NULL); rtnl_unlock();
+  return result;
+}
+int nw_cfg80211_prepare_scan(void) {
+  if (!owner || !primary) return -ENOTCONN;
+  if (!radio_enabled) return -ERFKILL;
+  rtnl_lock();
+  int result = dev_open(primary, NULL);
+  rtnl_unlock();
   return result;
 }
 int nw_cfg80211_set_power(int enabled) {

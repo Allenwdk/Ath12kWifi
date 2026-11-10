@@ -394,8 +394,12 @@ void nw_mainline_run(void) {
       result = nw_cfg80211_begin_attempt();
       lx_log(4, "wifi: disconnect begin_attempt result %d", result);
       if (!result) nw_cfg80211_event_begin(&b, bytes, sizeof(bytes), pending.operation, 0);
-    } else if (!result && pending.operation == NW_CONTROL_SCAN_REQUEST && pending.ssid_length) {
-      result = nw_control_put(&b, NW_CONTROL_ATTR_SSID, pending.ssid, pending.ssid_length);
+    } else if (!result && pending.operation == NW_CONTROL_SCAN_REQUEST) {
+      /* Finish a potentially slow first open before the supplicant starts
+       * its synchronous SCAN RPC. Keep the active session and generation. */
+      result = nw_cfg80211_prepare_scan();
+      if (!result && pending.ssid_length)
+        result = nw_control_put(&b, NW_CONTROL_ATTR_SSID, pending.ssid, pending.ssid_length);
     }
     if (!result) result = nw_cfg80211_event_send(&b);
     lx_log(4, "wifi: ui op %u event_begin/send result %d state %u", pending.operation, result, status.state);
