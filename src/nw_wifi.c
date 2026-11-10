@@ -325,7 +325,10 @@ static void receive_report(void) {
   char text[240]; nw_wifi_rx_state(text, sizeof text);
   char *rings = strchr(text, ';'); if (rings) *rings++ = 0;
   log_counters("wifi: rx", text); if (rings) log_counters("wifi: rx rings", rings);
+#ifndef NW_PLATFORM_AHB
+  /* This request builder uses ath12k HTT structures. AHB reports its receive counters above. */
   if (nw_board && nw_board->diagnostics && moved >= 20000 && now >= next_firmware) { next_firmware = now + 120000; nw_wifi_htt_stats(2); }
+#endif
 }
 /* Returns nonzero while traffic moves (frames arrived or frames wait to be sent): the board then calls again at once instead of sleeping.
  * lx_pump's own result is no guide, every handler is offered a look on each call. */
