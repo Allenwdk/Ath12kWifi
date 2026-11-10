@@ -79,6 +79,7 @@ int nw_wifi_tx_packet(void *context, size_t length, nw_packet_reader reader, voi
 void nw_wifi_status_get(struct nw_wifi_status *st);
 void nw_wifi_tx_reasons(char *text, int size);                          /* the driver's transmit completion counts, as text */
 void nw_wifi_link_state(char *text, int size); /* worker only; reads cached peer rates, no firmware request */
+void nw_wifi_rx_state(char *text, int size);
 int nw_wifi_start(const struct lx_platform *p, const struct nw_board *b);
 void nw_wifi_set_platform(const struct lx_platform *p); /* before exposing native socket callbacks */
 int nw_wifi_step(void);                                                   /* nonzero while frames move: call again without sleeping */
