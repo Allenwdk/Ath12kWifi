@@ -57,6 +57,10 @@ static void owner_closed(void *context, uint64_t id) {
 }
 static void firmware_wait(struct work_struct *work) {
   assert(work == &firmware_work);
+  u8 bytes[64]; struct nw_control_builder b;
+  assert(!nw_control_begin(&b, bytes, sizeof(bytes), NW_CONTROL_EVENT, NW_CONTROL_READY, 0, session, 7, 0));
+  assert(!nw_wifi_control_publish(session, bytes, b.length));
+  nw_wifi_control_poll(); /* TX-only work is queued before the socket closes. */
   nw_wifi_control_detach(session); nw_wifi_control_poll();
   lx_delay_ms(1);
   assert(!closed); /* The nested pump cannot cancel its own ancestor. */
@@ -81,6 +85,16 @@ static size_t packet(uint8_t *bytes, unsigned kind, unsigned operation, uint64_t
   assert(!nw_control_begin(&builder, bytes, 4096, kind, operation, 1, id, generation, NW_CONTROL_OK));
   if (operation == NW_CONTROL_SET_KEY) { u8 key[32]; memset(key, 0xd7, sizeof(key)); assert(!nw_control_put(&builder, NW_CONTROL_ATTR_KEY, key, sizeof(key))); }
   return builder.length;
+}
+static void firmware_wait_for_control(struct work_struct *work) {
+  (void)work;
+  const unsigned before = dispatched;
+  uint8_t bytes[4096];
+  size_t length = packet(bytes, NW_CONTROL_REQUEST, NW_CONTROL_INFO, session, 7);
+  assert(!nw_wifi_control_receive(session, length, copy_message, bytes));
+  nw_wifi_control_poll();
+  lx_delay_ms(2);
+  assert(dispatched == before + 1); /* Regulatory/11d waits must admit control requests. */
 }
 static void drain(void) { for (unsigned i = 0; i < 100 && nw_wifi_control_pending(); i++) { nw_wifi_control_poll(); lx_pump(); } assert(!nw_wifi_control_pending()); }
 static bool producer_done;
@@ -133,6 +147,10 @@ int main(void) {
   assert(!nw_control_put(&builder, NW_CONTROL_ATTR_EAPOL, payload, sizeof(payload)));
   unsigned published = 0; while (nw_wifi_control_publish(session, large, builder.length) == NW_CONTROL_OK) published++;
   assert(published > 0 && published < 16); drain(); assert(closed == 3);
+  assert(!nw_wifi_control_attach(&session));
+  DECLARE_WORK(waiting, firmware_wait_for_control);
+  queue_work(system_wq, &waiting); lx_pump(); drain();
+  nw_wifi_control_detach(session); drain(); assert(closed == 4);
   nw_wifi_control_shutdown(); nw_wifi_control_stats_get(&stats);
   assert(!stats.rx_items && !stats.tx_items && !stats.rx_bytes && !stats.tx_bytes && stats.stale_sessions == 1 && stats.rx_full && stats.tx_full);
   assert(allocated == freed && wakes && send_attempts > sent);

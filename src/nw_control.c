@@ -16,10 +16,10 @@ static struct nw_control_transport transport;
 static struct nw_control_dispatch dispatch;
 static struct nw_control_stats stats;
 static struct work_struct control_work;
-/* A close, power change or join can cancel firmware work. Nested pumps
- * still collect requests and run completions, but cannot close an interface
- * while a work item it must cancel is on the dispatcher stack. */
-static struct workqueue_struct control_queue = { .max_active = 1, .flags = LX_WQ_TOPLEVEL, .name = "native-control" };
+/* Owner close can cancel firmware work. Keep it on the outer executor
+ * while ordinary requests and replies progress during regulatory/11d waits. */
+static struct workqueue_struct control_queue = { .max_active = 1, .name = "native-control" };
+static struct workqueue_struct close_queue = { .max_active = 1, .flags = LX_WQ_TOPLEVEL, .name = "native-control-close" };
 static uint64_t next_session, writable_epoch;
 static bool bound, tx_ready = true;
 #define RX_LIMIT (256u * 1024u)
@@ -116,18 +116,24 @@ static void run_request(struct control_item *item) {
   enqueue_send(reply);
 }
 static void control_run(struct work_struct *work) {
-  (void)work; uint64_t start = lx_now_ns();
-  for (unsigned budget = 0; budget < 16; budget++) {
-    lx_shared_spin_lock(&control_lock); struct control_item *item = pop(&rx_head, &rx_tail);
-    if (item) { stats.rx_items--; stats.rx_bytes -= item->capacity; }
-    lx_shared_spin_unlock(&control_lock); if (!item) break;
+  (void)work;
+  /* Dispatch one RX item so the next item's execution role is selected
+   * before it runs. A close must never follow a request inside a nested
+   * firmware wait. Requests themselves must progress through those waits. */
+  lx_shared_spin_lock(&control_lock);
+  /* Socket detach can append a close after TX-only work was queued.
+   * Requeue that item on the close role before removing it from RX. */
+  const bool defer_close = rx_head && rx_head->kind == ITEM_CLOSE && work->queue != &close_queue;
+  struct control_item *item = defer_close ? NULL : pop(&rx_head, &rx_tail);
+  if (item) { stats.rx_items--; stats.rx_bytes -= item->capacity; }
+  lx_shared_spin_unlock(&control_lock);
+  if (item) {
     if (item->kind == ITEM_OPEN) {
       if (active(item->session) && dispatch.opened) dispatch.opened(dispatch.context, item->session);
     } else if (item->kind == ITEM_CLOSE) {
       if (dispatch.closed) dispatch.closed(dispatch.context, item->session);
       lx_free(item->owner);
     } else { run_request(item); release_message(item); }
-    if (lx_now_ns() - start >= 2000000ULL) break;
   }
   flush_send(); nw_wifi_control_poll();
 }
@@ -197,7 +203,13 @@ int nw_wifi_control_pending(void) {
   lx_shared_spin_lock(&control_lock); int pending = rx_head != NULL || (tx_head && (tx_ready || !client || tx_head->session != client->session));
   lx_shared_spin_unlock(&control_lock); return pending;
 }
-void nw_wifi_control_poll(void) { if (nw_wifi_control_pending()) queue_work(&control_queue, &control_work); }
+void nw_wifi_control_poll(void) {
+  lx_shared_spin_lock(&control_lock);
+  bool pending = rx_head || (tx_head && (tx_ready || !client || tx_head->session != client->session));
+  struct workqueue_struct *queue = rx_head && rx_head->kind == ITEM_CLOSE ? &close_queue : &control_queue;
+  lx_shared_spin_unlock(&control_lock);
+  if (pending) queue_work(queue, &control_work);
+}
 void nw_wifi_control_stats_get(struct nw_control_stats *out) {
   lx_shared_spin_lock(&control_lock); *out = stats; out->active_session = client ? client->session : 0; lx_shared_spin_unlock(&control_lock);
 }
